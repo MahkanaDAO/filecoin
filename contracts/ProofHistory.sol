@@ -2,6 +2,7 @@
 
 pragma solidity >=0.7.0 <0.9.0;
 
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "hardhat/console.sol";
 
@@ -23,24 +24,34 @@ contract ProofHistory {
     uint public unverifiedPoRepCount;
     mapping(string => Proof) public poReps;
     mapping(string => Proof) public poSts;
-    mapping(address => uint)[24] public hourlyCommitments;
+    mapping(address => bool)[24] public hourlyParticipants;
+    mapping(address => uint[]) public commitments;
 
     event poRepSubmission(address node);
     event poStSubmission(address node, uint day, uint hour);
 
     constructor(address[][24] memory dailySchedule) {
         owner = msg.sender;
-        for (uint i = 0; i < dailySchedule.length; i++) {
-            for (uint j = 0; j < dailySchedule[i].length; j++) {
-                address node = dailySchedule[i][j];
-                hourlyCommitments[i][node]++;
+        for (uint hour = 0; hour < dailySchedule.length; hour++) {
+            for (uint sectorID = 0; sectorID < dailySchedule[hour].length; sectorID++) {
+                address node = dailySchedule[hour][sectorID];
+                hourlyParticipants[hour][node] = true;
 
-                uint sectorID = hourlyCommitments[i][node];
                 string memory key = getPoRepKey(node, sectorID);
-                poReps[key] = Proof(node, sectorID, "", 0, "", ProofStatus.UNVERIFIED, ProofKind.POREP);
+                if (poReps[key].kind == ProofKind.UNKNOWN) {
+                    commitments[node].push(sectorID);
+                    poReps[key] = Proof(node, sectorID, "", 0, "", ProofStatus.UNVERIFIED, ProofKind.POREP);
+                    unverifiedPoRepCount++;
+                }
             }
         }
-        unverifiedPoRepCount = 24 * dailySchedule[0].length;
+    }
+
+    function validateSectors(uint[] memory expected, uint[] memory submitted) pure public {
+        require(expected.length == submitted.length, "lengths of submitted and expected sectors aren't equal");
+        for (uint i = 0; i < expected.length; i++) {
+            require(expected[i] == submitted[i], "submitted and expected sectors aren't equal");
+        }
     }
 
     function recordPoRepSubmission(address node, uint[] memory sectors, string[] memory commRs, uint[] memory nums, string[] memory contents) external {
@@ -48,11 +59,12 @@ contract ProofHistory {
         emit poRepSubmission(node);
     }
 
-    function recordPoStSubmission(address node, uint day, uint hour, uint[] memory sectors, string[] memory commRs, uint[] memory nums, string[] memory contents) external {
-        uint sectorCount = hourlyCommitments[hour][node];
-        require(sectors.length == sectorCount, "number of committed sectors for the hour don't match number of submitted proofs");
-        
-        recordProofSubmission(node, day, hour, sectors, commRs, nums, contents, ProofKind.POST);
+    function recordPoStSubmission(address node, uint day, uint hour, uint[] memory submittedSectors, string[] memory commRs, uint[] memory nums, string[] memory contents) external {
+        require(hourlyParticipants[hour][node], "provided node isn't an expected participant");
+        uint[] storage expectedSectors = commitments[node];
+        validateSectors(expectedSectors, submittedSectors);
+
+        recordProofSubmission(node, day, hour, submittedSectors, commRs, nums, contents, ProofKind.POST);
         emit poStSubmission(node, day, hour);
     }
 
@@ -73,13 +85,21 @@ contract ProofHistory {
 
         for (uint i = 0; i < sectors.length; i++) {
             string memory key = getProofKey(node, day, hour, sectors[i], kind);
-            poSts[key] = Proof(node, sectors[i], commRs[i], nums[i], contents[i], ProofStatus.UNVERIFIED, kind);
+            Proof memory proof = Proof(node, sectors[i], commRs[i], nums[i], contents[i], ProofStatus.UNVERIFIED, kind);
+            if (kind == ProofKind.POREP) {
+                poReps[key] = proof;
+            } else {
+                poSts[key] = proof;
+            }
+            
             console.log(node, day, hour, sectors[i]);
             console.log(key);
         }
     }
 
     function acceptPoReps(address node, uint[] memory sectors) external {
+        validateSectors(commitments[node], sectors);
+
         for (uint i = 0; i < sectors.length; i++) {
             string memory key = getPoRepKey(node, sectors[i]);
             if (poReps[key].status == ProofStatus.UNVERIFIED) {
@@ -105,7 +125,8 @@ contract ProofHistory {
         require(msg.sender == owner, "unauthorized caller");
         for (uint i = 0; i < sectors.length; i++) {
             string memory key = getProofKey(node, day, hour, sectors[i], kind);
-            poSts[key].status = status;
+            Proof storage proof = kind == ProofKind.POREP ? poReps[key] : poSts[key];
+            proof.status = status;
         }
     }
 

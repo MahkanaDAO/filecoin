@@ -1,5 +1,5 @@
 {
-  "name": "on-chain",
+  "name": "frontend",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -11,7 +11,9 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-network-helpers": "^1.0.7",
     "@nomicfoundation/hardhat-toolbox": "^2.0.1",
-    "hardhat": "^2.12.6"
+    "@types/luxon": "^3.2.0",
+    "hardhat": "^2.12.6",
+    "luxon": "^3.3.0"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.8.1"

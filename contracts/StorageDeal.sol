@@ -2,7 +2,7 @@
 
 pragma solidity >=0.7.0 <0.9.0;
 
-import "./MicroNodeRegistry.sol";
+import "./ProviderRegistry.sol";
 import "./ProofHistory.sol";
 import "hardhat/console.sol";
 
@@ -21,7 +21,7 @@ contract StorageDeal {
     }
 
     address owner;
-    address user;
+    address requester;
     // The schedule is a 2D array that describes how the user's data is split amongst the participating nodes in the deal. 
     // The outer array contains 24 inner arrays, one for each hour of the day.
     // An inner array represents how the data is divided between the nodes for the hour.
@@ -44,38 +44,43 @@ contract StorageDeal {
 
     uint hourlySectorReward;
     uint totalFinalReward;
-    uint startTime;
-    uint endTime;
-    uint dealDuration; 
+    uint startDate;
+    uint endDate;
+    uint dealDays; 
     // Some functions can only be called if the deal has a certain status
-    Status dealStatus;
+    Status public dealStatus;
 
     ProofHistory public history;
     address verifier;
 
     /**
-     * @param _user client who wishes to store data with the network
-     * @param _dealDuration length of the storage deal in days
+     * @param _requester client who wishes to store data with the network
+     * @param _startDate timestamp in in *seconds* of the deal's start date
+     * @param _endDate timestamp in *seconds* of the deal's end date
      * @param _hourlySectorReward tokens to be paid to each node every hour while deal is ongoing
      * @param _totalFinalReward total tokens to be split and paid to all nodes at end of deal
      * @param _dailySchedule matrix of committed nodes for each hour of the day
      * @param _verifier external contract to validate poRep (proof of replication) and poSts (proof of spacetime)
      */
     constructor (
-        address _user, 
-        uint _dealDuration, 
+        address _requester, 
+        uint _startDate,
+        uint _endDate, 
         uint _hourlySectorReward, 
         uint _totalFinalReward, 
         address[][24] memory _dailySchedule,
         address _verifier
     ) payable {
         owner = msg.sender;
-        user = _user;
+        requester = _requester;
         dailySchedule = _dailySchedule;
 
         hourlySectorReward = _hourlySectorReward;
         totalFinalReward = _totalFinalReward;
-        dealDuration = _dealDuration;
+        startDate = _startDate;
+        endDate = _endDate;
+        dealDays = (endDate - startDate) / 60 / 60 / 24;
+    
         dealStatus = Status.PENDING;
 
         setParticipants();
@@ -91,7 +96,7 @@ contract StorageDeal {
                 address node = dailySchedule[i][j];
                 WorkLog storage log = participants[node];
                 log.isParticipant = true;
-                log.commitments += dealDuration;
+                log.commitments += dealDays;
             }
         }
     }
@@ -103,16 +108,15 @@ contract StorageDeal {
     }
 
     function startDeal() external payable {
-        require(msg.sender == user, "unauthorized caller");
+        require(msg.sender == requester, "unauthorized caller");
         require(dealStatus == Status.PENDING, "storage deal isn't pending");
         require(history.unverifiedPoRepCount() == 0, "not all proofs of replication have been validated");
 
         uint totalDailyReward = 24 * hourlySectorReward * getSectorCount();
-        uint totalReward = (dealDuration * totalDailyReward) + totalFinalReward;
+        uint totalReward = (dealDays * totalDailyReward) + totalFinalReward;
         // TODO we may want to take gas into account too.
         require(msg.value >= totalReward, "insufficient tokens to fund deal");
         console.log(msg.value, totalReward);
-        startTime = block.timestamp;
         dealStatus = Status.IN_PROGRESS;
     }
 
@@ -128,7 +132,7 @@ contract StorageDeal {
     }
 
     function validateOngoingDeal() view private {
-        require(block.timestamp - startTime <= dealDuration * 1 days, "storage deal's end time has passed");
+        require(block.timestamp - startDate <= dealDays * 1 days, "storage deal's end time has passed");
         require(dealStatus == Status.IN_PROGRESS, "storage deal isn't in progress");
     }
 
@@ -188,7 +192,7 @@ contract StorageDeal {
         require(msg.sender == owner, "unauthorized caller");
         require(dealStatus == Status.IN_PROGRESS, "storage deal isn't in progress");
         
-        uint totalCommitments = dealDuration * 24 * getSectorCount();
+        uint totalCommitments = dealDays * 24 * getSectorCount();
         for (uint i = 0; i < dailySchedule.length; i++) {
             for (uint j = 0; j < dailySchedule[i].length; j++) {
                 address node = dailySchedule[i][j];
@@ -200,7 +204,7 @@ contract StorageDeal {
         //  1) the user overpaid up front 
         //  2) or some nodes weren't fully compensated because they didn't fulfill the storage they committed to.
         // We should send these tokens back to the user.
-        payable(user).transfer(address(this).balance);
+        payable(requester).transfer(address(this).balance);
         dealStatus = Status.COMPLETE;
 
         // TODO @ygao record the fulfillments and commitments in the node registry.
